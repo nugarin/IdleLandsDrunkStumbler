@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IdleLandDrunkStumbler
 // @namespace    http://tampermonkey.net/
-// @version      0.10
+// @version      0.9
 // @require     http://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js
 // @description  Guide your "hero" using the power of alcohol!
 // @author       commiehunter
@@ -55,28 +55,27 @@
                 }},
             });
         };
+        
     }
     //
     var _cp = new ComponentProvider();
     _cp.init();
     var _currentCachedMap = null;
+    var blockers = [16, 17, 3, 33, 37, 38, 39, 44, 45, 46, 47, 50, 53, 54, 55, 56, 57, 81, 83];
     //
-    function reloadCachedMap(){
-        var mr = _cp.MapRendererComponent;
-        if (mr){
-            var currentMap = mr.player.map;
-            _currentCachedMap = mr.phaser.cache.getTilemapData(currentMap);
-            _currentCachedMap.mapName = currentMap;
-        }
-    }
-    
     function initMap(){
         console.log("initMap");
         var mapInstance = _cp.MapPage;
         if (!mapInstance){
             return;
         }
-        reloadCachedMap();
+        var mr = _cp.MapRendererComponent;
+        var currentMap = mr.player.map;
+        _currentCachedMap = mr.phaser.cache.getTilemapData(currentMap);
+        
+        
+        
+        
         var mapCanvas = $("canvas");
         mapCanvas[0].addEventListener("dblclick", setDrunkWalkTarget);
         mapCanvas[0].addEventListener("click", clearDrunkWalkTarget);
@@ -105,17 +104,12 @@
         
             var currentMap = player.map;
             
-            
-            if (!_currentCachedMap || _currentCachedMap.mapName != currentMap){
-                reloadCachedMap();
-            }
-            if (!_currentCachedMap || _currentCachedMap.mapName != currentMap){
-                console.log("ERROR, failed to load map data for " + currentMap);
+            var cachedMapData = _currentCachedMap;
+            if (!_currentCachedMap){
                 return; //no map cache
             }
-            
             var startTime = (new Date()).getTime();
-            var data = _currentCachedMap.data;
+            var data = cachedMapData.data;
             var t = data.layers[0]; //terrain
             var b = data.layers[1]; //blockers
             var cacheKey = currentMap + "_" + _target.x + "_" + _target.y;
@@ -198,6 +192,9 @@
                                     var bestNeighbourCell = _.first(neighboursByScore);
                                     var bestNeighbourScore = currentPath.data[bestNeighbourCell.i];
                                     var ourScore = bestNeighbourScore + 1;
+                                    if (isNaN(ourScore) || ourScore == 0){
+                                        debugger;
+                                    }
                                     currentPath.data[cell.i] = ourScore;
                                     scoredCountThisPass++;
                                     if (scoredWalkableNeighbours.length > 1){ //Can also rescore some of the neighbours
@@ -213,6 +210,9 @@
                             }else{
                                 alreadyScoredThisPass++;
                             }
+                        }
+                        if (currentPath.data[cell.i] === undefined){
+                            debugger;
                         }
                     });
                     allDoneThisCircle = blockedCountThisPass + scoredCountThisPass + alreadyScoredThisPass == currentCircle.length;
@@ -513,11 +513,11 @@
         //observer.disconnect();
         
         /*
-how does one hook into the contentUpdate? have to replace and intercept the original function?
- var hookedHandleContentUpdate = primus.handleContentUpdate
- then you replace the original with your own
- return ev0_hookedHandleContentUpdate.apply(this, arguments);
- at the end of your hook
+         [ commiehunter ] also an0, how does one hook into the contentUpdate? have to replace and intercept the original function?
+Mar 12, 2017, 11:46:54 AM [  1 An0 ] var hookedHandleContentUpdate = primus.handleContentUpdate
+Mar 12, 2017, 11:47:05 AM [  1 An0 ] then you replace the original with your own
+Mar 12, 2017, 11:47:18 AM [  1 An0 ] return ev0_hookedHandleContentUpdate.apply(this, arguments);
+Mar 12, 2017, 11:47:27 AM [  1 An0 ] at the end of your hook
         */
         
         setInterval(drunkWalkCheckPulse, 1000);
