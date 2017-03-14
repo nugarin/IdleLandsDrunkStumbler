@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IdleLandDrunkStumbler
 // @namespace    http://tampermonkey.net/
-// @version      0.10
+// @version      0.11
 // @require     http://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js
 // @description  Guide your "hero" using the power of alcohol!
 // @author       commiehunter
@@ -12,6 +12,9 @@
 (function() {
     'use strict';
 /*
+0.11  * Step into the 21st century and clean cache before OOM happens!
+      * Attempt at fixing map loading on map change
+      
 0.10  * Cached map now properly reloaded on map change 
 0.09  * Multi pass path calculation 
 0.08: * Path calculation now every tick
@@ -68,7 +71,13 @@
         if (mr){
             var currentMap = mr.player.map;
             _currentCachedMap = mr.phaser.cache.getTilemapData(currentMap);
-            _currentCachedMap.mapName = currentMap;
+            if (_currentCachedMap){
+                mr.phaser.load.tilemap(mr.player.map, mr.game.baseUrl+ "/maps/world-maps/" + mr.player.mapPath, null, window.Phaser.Tilemap.TILED_JSON);
+                _currentCachedMap = mr.phaser.cache.getTilemapData(currentMap);
+                if (_currentCachedMap){
+                    _currentCachedMap.mapName = currentMap;
+                }
+            }
         }
     }
     
@@ -95,10 +104,21 @@
         this._currentRadius = 0;
         this._cachedPaths = {};
         this._unwalkableVal = 100000000;
-        
-   
+        this._cacheTTL = 60 * 60 * 1000;
+            
+        this.cleanCache = function (){
+            var me = this;
+            _.forEach(this._cachedPaths, function(cp, idx){
+                var tNow = (new Date()).getTime();
+                if (cp.lastUsedTime + me._cacheTTL < tNow){
+                    delete this._cachedPaths[idx];
+                    console.log("cleaned path " + idx + " from cache");
+                }
+            });
+        };
         //Updates path when needed
         this.findPath = function(){
+            this.cleanCache();//TODO: less often
             if (!_target){
                 return; //nothing to do
             }
@@ -252,7 +272,7 @@
                 });
                 tNow = (new Date()).getTime();
             }while(tNow < killTime && !currentPath.done && r < maxRadius);
-            console.log("PF loop done in "+ (tNow - startTime) + "ms R:"+r +"(" + maxRadius + ") done:"+currentPath.done, currentPath,"Dbg:", dbgInfo);
+            console.log("PF loop done in "+ (tNow - startTime) + "ms R:"+r +"(" + maxRadius + ") done:"+currentPath.done, currentPath); //,"Dbg:", dbgInfo);
             return currentPath;
         };
 
