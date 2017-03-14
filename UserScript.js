@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IdleLandDrunkStumbler
 // @namespace    http://tampermonkey.net/
-// @version      0.8
+// @version      0.10
 // @require     http://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js
 // @description  Guide your "hero" using the power of alcohol!
 // @author       commiehunter
@@ -55,27 +55,28 @@
                 }},
             });
         };
-        
     }
     //
     var _cp = new ComponentProvider();
     _cp.init();
     var _currentCachedMap = null;
-    var blockers = [16, 17, 3, 33, 37, 38, 39, 44, 45, 46, 47, 50, 53, 54, 55, 56, 57, 81, 83];
     //
+    function reloadCachedMap(){
+        var mr = _cp.MapRendererComponent;
+        if (mr){
+            var currentMap = mr.player.map;
+            _currentCachedMap = mr.phaser.cache.getTilemapData(currentMap);
+            _currentCachedMap.mapName = currentMap;
+        }
+    }
+    
     function initMap(){
         console.log("initMap");
         var mapInstance = _cp.MapPage;
         if (!mapInstance){
             return;
         }
-        var mr = _cp.MapRendererComponent;
-        var currentMap = mr.player.map;
-        _currentCachedMap = mr.phaser.cache.getTilemapData(currentMap);
-        
-        
-        
-        
+        reloadCachedMap();
         var mapCanvas = $("canvas");
         mapCanvas[0].addEventListener("dblclick", setDrunkWalkTarget);
         mapCanvas[0].addEventListener("click", clearDrunkWalkTarget);
@@ -104,12 +105,17 @@
         
             var currentMap = player.map;
             
-            var cachedMapData = _currentCachedMap;
-            if (!_currentCachedMap){
+            
+            if (!_currentCachedMap || _currentCachedMap.mapName != currentMap){
+                reloadCachedMap();
+            }
+            if (!_currentCachedMap || _currentCachedMap.mapName != currentMap){
+                console.log("ERROR, failed to load map data for " + currentMap);
                 return; //no map cache
             }
+            
             var startTime = (new Date()).getTime();
-            var data = cachedMapData.data;
+            var data = _currentCachedMap.data;
             var t = data.layers[0]; //terrain
             var b = data.layers[1]; //blockers
             var cacheKey = currentMap + "_" + _target.x + "_" + _target.y;
@@ -140,74 +146,122 @@
             if (currentPath.done ){
                 return currentPath; //done
             }
+            var maxRadius = Math.max(data.height, data.width) - 1;
+            
             var r = currentPath.radius; //start from here
+            var dbgInfo = {secondPassCount :0};
+            var dbgStats = dbgInfo.stats = [];
+            var me = this;
             do{
                 r++;
+                var dbg = {r: r, passStats:[]};
+                dbgStats.push(dbg);
                 var currentCircle = this.circleIndexes(_target, r, b);
                 var noneFoundThisCircle = true;
                 var allDoneThisCircle = true;
-                for(var i = 0; i< currentCircle.length; i++){
-                    var cell = currentCircle[i];
-                    //var blockCell = b.data[cell.i];
-                    //var terrCell = t.data[cell.i];
-                    //console.log(cell, blockCell,terrCell);
-                    
-                    //if (_.includes(blockers, b.data[cell.i])){
-                    if (b.data[cell.i] !== 0){
-                        currentPath.data[cell.i] = -b.data[cell.i]; //mark as blocked
-                    }else{ //can walk on this
-                        currentPath.data[cell.i] = 0; //mark walkable
-                        var cellNeighbours = this.circleIndexes(cell, 1, b);
-                        var walkableScoredNeighbours = _.reject(cellNeighbours, function(cn){
-                            if (currentPath.data[cn.i] < 0){
-                                return true;
-                            }
-                            if (currentPath.data[cn.i] === 0){
-                                return true;
-                            }
-                            if (currentPath.data[cn.i] === undefined){
-                                return true;
-                            }
-                        });
-                        if (walkableScoredNeighbours.length){
-                            var ordered = _.sortBy(walkableScoredNeighbours, function(cn){
-                                return currentPath.data[cn.i];
-                            });
-                            var best = _.first(ordered);
-                            currentPath.data[cell.i] = currentPath.data[best.i] + 1; //set path
-                            noneFoundThisCircle = false;
+                //
+                var passes = [currentCircle, _.reverse(currentCircle)]; //reverse pass for mazes
+                //
+                _.forEach(passes, function(currentPass, passIndex){
+                    var dbgCurrPass = dbg.passStats[passIndex] = {};
+                    var blockedCountThisPass = 0; //Count cells that were marked blocked from this circle only, exclude neighbour loading
+                    var scoredCountThisPass = 0;
+                    var alreadyScoredThisPass = 0;
+                    _.forEach(currentPass, function(cell){
+                        var blockValue = parseInt(b.data[cell.i]);
+                        if (blockValue > 0){
+                            currentPath.data[cell.i] = -blockValue;
+                            blockedCountThisPass++;
                         }else{
-                            allDoneThisCircle = false; //TODO: this is not optimal since will also catch all the closed rooms, find a better solution
+                            if (!currentPath.data[cell.i] || !isNaN(currentPath.data[cell.i])){
+                                currentPath.data[cell.i] = 0;
+                            }
+                            if (!currentPath.data[cell.i]){ //is ist scored yet?
+                                var cellNeighbours = me.circleIndexes(cell, 1, b);
+                                var scorableWalkableNeigbours = [];
+                                var scoredWalkableNeighbours = [];
+                                _.forEach(cellNeighbours, function(cn){
+                                    if (currentPath.data[cn.i] === undefined){
+                                        currentPath.data[cn.i] = -b.data[cn.i]; //load from blocked
+                                    }
+                                    if (currentPath.data[cn.i] > 0){
+                                        scoredWalkableNeighbours.push(cn);
+                                    }
+                                    if(currentPath.data[cn.i] >= 0){
+                                        scorableWalkableNeigbours.push(cn);
+                                    }
+                                });
+                                if (scoredWalkableNeighbours.length){
+                                    var neighboursByScore = _.sortBy(scoredWalkableNeighbours, function(cn){
+                                            return currentPath.data[cn.i];
+                                    });
+                                    var bestNeighbourCell = _.first(neighboursByScore);
+                                    var bestNeighbourScore = currentPath.data[bestNeighbourCell.i];
+                                    var ourScore = bestNeighbourScore + 1;
+                                    currentPath.data[cell.i] = ourScore;
+                                    scoredCountThisPass++;
+                                    if (scoredWalkableNeighbours.length > 1){ //Can also rescore some of the neighbours
+                                        _.forEach(scoredWalkableNeighbours, function(cn){
+                                            if (currentPath.data[cn.i] === 0){ //not scored, award ours + 1
+                                                currentPath.data[cn.i] = ourScore + 1;
+                                            }else if (currentPath.data[cn.i] > ourScore +1){
+                                                currentPath.data[cn.i] = ourScore + 1; // alternative, better path found
+                                            }
+                                        });
+                                    }
+                                }
+                            }else{
+                                alreadyScoredThisPass++;
+                            }
                         }
+                    });
+                    allDoneThisCircle = blockedCountThisPass + scoredCountThisPass + alreadyScoredThisPass == currentCircle.length;
+                    var currentPassResults = _.map(currentPass, function(dn){
+                        var score = currentPath.data[dn.i];
+                        var dobj = {x: dn.x, y:dn.y, i: dn.i, score:score};
+                        return dobj;
+                    });
+                    
+                    dbgCurrPass.anomalous = _.reject(currentPassResults, function(dn){
+                        return dn.score > 0 || dn.score <= -1;
+                    });
+                    
+                    noneFoundThisCircle = scoredCountThisPass === 0;
+                    dbgCurrPass.blockedCountThisPass = blockedCountThisPass;
+                    dbgCurrPass.scoredCountThisPass = scoredCountThisPass;
+                    dbgCurrPass.noneFoundThisCircle = noneFoundThisCircle;
+                    dbgCurrPass.allDoneThisCircle = allDoneThisCircle;
+                    dbgCurrPass.currentCircleLength = currentCircle.length;
+                    dbgCurrPass.alreadyScoredThisPass = alreadyScoredThisPass;
+                    if (scoredCountThisPass > 0 && !allDoneThisCircle){
+                        dbgInfo.secondPassCount++;
+                        return true; //Found some, but not all - do 2nd, reverse pass
                     }
-                }
-                if (allDoneThisCircle){
-                    currentPath.radius = r; //no need to redo from scratch
-                }
-                if (noneFoundThisCircle){
+                    return false; //No need for 2nd pass
+                });
+                // if (allDoneThisCircle && r<maxRadius){ TODO: fix and turn on again
+                //     currentPath.radius = r; //no need to redo from scratch
+                // }
+                if (noneFoundThisCircle || r > maxRadius){
                     r = currentPath.radius; //reset radius to rewalk the maze
                 }
-                
                 currentPath.done  = _.every(playerNeighbours, function(n){
                     return currentPath.data[n] !== undefined && currentPath.data[n] !== 0;
                 });
-                
                 tNow = (new Date()).getTime();
-            }while(tNow < killTime && !currentPath.done);
-            
-            
-            console.log("PF loop done in "+ (tNow - startTime) + "ms R:"+r + " done:"+currentPath.done, currentPath);
-            
+            }while(tNow < killTime && !currentPath.done && r < maxRadius);
+            console.log("PF loop done in "+ (tNow - startTime) + "ms R:"+r +"(" + maxRadius + ") done:"+currentPath.done, currentPath,"Dbg:", dbgInfo);
             return currentPath;
         };
 
         this.circleIndexes = function(centre, radius, data){
          var y = 0;
          var x = 0;
-         var n = {};
+         var n = {}; //Using a dictionary here, since this way we can easily get rid of duplicated corner coords
          var c = null;
          var maxX = data.width - 1;
          var maxY = data.height - 1;
+         // We do these in a circle, so we can do a second pass in reverse
          // Top row
          y = centre.y - radius;
          if (y > 0){
@@ -217,10 +271,19 @@
                  n[c.i] = c;
              }
          }
+          // Right side
+         x = centre.x + radius;
+         if (x < maxX){
+             for (y = Math.max(centre.y - radius,0); y <= Math.min(centre.y + radius, maxY); y++){
+                 c = {x: x, y: y};
+                 c.i = this.coordsToIndex(c, data);
+                 n[c.i] = c;
+             }
+         }
          //Bottom row
          y = centre.y + radius;
          if (y < maxY){
-             for(x = Math.max(centre.x - radius, 0); x <= Math.min(centre.x + radius, maxX); x++){
+             for(x = Math.min(centre.x + radius, maxX); x >= Math.max(centre.x - radius, 0) ; x--){
                  c = {x: x, y: y};
                  c.i = this.coordsToIndex(c, data);
                  n[c.i] = c;
@@ -229,16 +292,7 @@
          //Left side
          x = centre.x - radius;
          if (x > 0){
-             for (y = Math.max(centre.y - radius, 0); y <= Math.min(centre.y + radius, maxY); y++){
-                 c = {x: x, y: y};
-                 c.i = this.coordsToIndex(c, data);
-                 n[c.i] = c;
-             }
-         }
-         // Right side
-         x = centre.x + radius;
-         if (x < maxX){
-             for (y = Math.max(centre.y - radius,0); y <= Math.min(centre.y + radius, maxY); y++){
+             for (y = Math.min(centre.y + radius, maxY); y >= Math.max(centre.y - radius, 0) ; y--){
                  c = {x: x, y: y};
                  c.i = this.coordsToIndex(c, data);
                  n[c.i] = c;
@@ -459,11 +513,11 @@
         //observer.disconnect();
         
         /*
-         [ commiehunter ] also an0, how does one hook into the contentUpdate? have to replace and intercept the original function?
-Mar 12, 2017, 11:46:54 AM [  1 An0 ] var hookedHandleContentUpdate = primus.handleContentUpdate
-Mar 12, 2017, 11:47:05 AM [  1 An0 ] then you replace the original with your own
-Mar 12, 2017, 11:47:18 AM [  1 An0 ] return ev0_hookedHandleContentUpdate.apply(this, arguments);
-Mar 12, 2017, 11:47:27 AM [  1 An0 ] at the end of your hook
+how does one hook into the contentUpdate? have to replace and intercept the original function?
+ var hookedHandleContentUpdate = primus.handleContentUpdate
+ then you replace the original with your own
+ return ev0_hookedHandleContentUpdate.apply(this, arguments);
+ at the end of your hook
         */
         
         setInterval(drunkWalkCheckPulse, 1000);
