@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IdleLandDrunkStumbler
 // @namespace    http://tampermonkey.net/
-// @version      0.6
+// @version      0.7
 // @require     http://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js
 // @description  Guide your "hero" using the power of alcohol!
 // @author       commiehunter
@@ -11,6 +11,10 @@
 
 (function() {
     'use strict';
+/*
+0.7: * Does not require the MapRenderComponent instance while running any more
+     * Apparently not all "blockers" were actually blockers
+*/
 
     //Double click on the map to set target
     //Single click on the map to clear target
@@ -54,7 +58,8 @@
     //
     var _cp = new ComponentProvider();
     _cp.init();
-    
+    var _currentCachedMap = null;
+    var blockers = [16, 17, 3, 33, 37, 38, 39, 44, 45, 46, 47, 50, 53, 54, 55, 56, 57, 81, 83];
     //
     function initMap(){
         console.log("initMap");
@@ -62,6 +67,13 @@
         if (!mapInstance){
             return;
         }
+        var mr = _cp.MapRendererComponent;
+        var currentMap = mr.player.map;
+        _currentCachedMap = mr.phaser.cache.getTilemapData(currentMap);
+        
+        
+        
+        
         var mapCanvas = $("canvas");
         mapCanvas[0].addEventListener("dblclick", setDrunkWalkTarget);
         mapCanvas[0].addEventListener("click", clearDrunkWalkTarget);
@@ -85,14 +97,13 @@
             if (!_target){
                 return; //nothing to do
             }
-            var mr = _cp.MapRendererComponent;
-            if (!mr){
-                return; //Need map cache from here
-            }
-            var currentMap = mr.player.map;
-            var c = mr.phaser.cache;
-            var cachedMapData = c.getTilemapData(currentMap);
-            if (!cachedMapData){
+            var app = _cp.MyApp;
+            var player = app.state.player.value;
+        
+            var currentMap = player.map;
+            
+            var cachedMapData = _currentCachedMap;
+            if (!_currentCachedMap){
                 return; //no map cache
             }
             var startTime = (new Date()).getTime();
@@ -120,7 +131,7 @@
             //
             var tNow = 0;
             //
-            var playerNeighbours = this.circleIndexes(mr.player, 1, b);
+            var playerNeighbours = this.circleIndexes(player, 1, b);
             currentPath.done  = _.every(playerNeighbours, function(n){
                 return currentPath.data[n.i] !== undefined && currentPath.data[n.i] !== 0;
             });
@@ -139,6 +150,7 @@
                     //var terrCell = t.data[cell.i];
                     //console.log(cell, blockCell,terrCell);
                     
+                    //if (_.includes(blockers, b.data[cell.i])){
                     if (b.data[cell.i] !== 0){
                         currentPath.data[cell.i] = -1; //mark as blocked
                     }else{ //can walk on this
@@ -432,10 +444,22 @@
                 }
             });
         });
-
+        // configuration of the observer:
         var config = { attributes: true, childList: true, characterData: true };
 
+        // pass in the target node, as well as the observer options
         observer.observe(target, config);
+
+        // later, you can stop observing
+        //observer.disconnect();
+        
+        /*
+         [ commiehunter ] also an0, how does one hook into the contentUpdate? have to replace and intercept the original function?
+Mar 12, 2017, 11:46:54 AM [  1 An0 ] var hookedHandleContentUpdate = primus.handleContentUpdate
+Mar 12, 2017, 11:47:05 AM [  1 An0 ] then you replace the original with your own
+Mar 12, 2017, 11:47:18 AM [  1 An0 ] return ev0_hookedHandleContentUpdate.apply(this, arguments);
+Mar 12, 2017, 11:47:27 AM [  1 An0 ] at the end of your hook
+        */
         
         setInterval(drunkWalkCheckPulse, 1000);
         initMap();
