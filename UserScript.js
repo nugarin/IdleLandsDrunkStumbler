@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IdleLandDrunkStumbler
 // @namespace    http://tampermonkey.net/
-// @version      0.7
+// @version      0.8
 // @require     http://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js
 // @description  Guide your "hero" using the power of alcohol!
 // @author       commiehunter
@@ -12,6 +12,8 @@
 (function() {
     'use strict';
 /*
+0.8: * Path calculation now every tick
+     
 0.7: * Does not require the MapRenderComponent instance while running any more
      * Apparently not all "blockers" were actually blockers
 */
@@ -152,12 +154,12 @@
                     
                     //if (_.includes(blockers, b.data[cell.i])){
                     if (b.data[cell.i] !== 0){
-                        currentPath.data[cell.i] = -1; //mark as blocked
+                        currentPath.data[cell.i] = -b.data[cell.i]; //mark as blocked
                     }else{ //can walk on this
                         currentPath.data[cell.i] = 0; //mark walkable
                         var cellNeighbours = this.circleIndexes(cell, 1, b);
                         var walkableScoredNeighbours = _.reject(cellNeighbours, function(cn){
-                            if (currentPath.data[cn.i] === -1){
+                            if (currentPath.data[cn.i] < 0){
                                 return true;
                             }
                             if (currentPath.data[cn.i] === 0){
@@ -351,9 +353,12 @@
         }
         var stumbledUsingPath = false;
         var path = false;
+        
         var currentScore = 0;
         var projectedScore = 0;
+        var projectedCoords = {};
         if (_prevCoords){
+               path = _pf.findPath();
                if (_prevCoords.x == newCoords.x && _prevCoords.y == newCoords.y){
                    return; //hasn't moved yet
                }
@@ -362,8 +367,8 @@
                 if (_previousDistance){
                     var dx = newCoords.x - _prevCoords.x;
                     var dy = newCoords.y - _prevCoords.y;
-                    var projectedCoords = {x:newCoords.x + dx, y:newCoords.y + dy};
-                    path = _pf.findPath();
+                    projectedCoords = {x:newCoords.x + dx, y:newCoords.y + dy};
+                    
                     
                     if (path && path.done){
                         var projectedIndex = projectedCoords.y * path.width + projectedCoords.x;
@@ -398,7 +403,7 @@
             var displayDistance = Math.round(currentDistance * 100)/100;
 
                 var mapTitle = "TARGET:"+ _target.x + ", " + _target.y + " D:" + displayDistance + " DRUNK:" + newDrunkState + " PATH:" + stumbledUsingPath;
-                console.log("moving from "+ newCoords.x + ", "+ newCoords.y +  " to " + mapTitle + " current tile score: "+ currentScore + " next tile: "+ projectedScore);
+                console.log("moving from "+ newCoords.x + ", "+ newCoords.y +  " to " + mapTitle + " current tile score: "+ currentScore + " next tile: "+ projectedScore + "["+ projectedCoords.x + ","+ projectedCoords.y +"]");
                 setMapTitle(mapTitle);
         }
         _prevCoords = newCoords;
