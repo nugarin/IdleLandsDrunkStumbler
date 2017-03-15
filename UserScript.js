@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IdleLandDrunkStumbler
 // @namespace    http://tampermonkey.net/
-// @version      0.11
+// @version      0.12
 // @require     http://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js
 // @description  Guide your "hero" using the power of alcohol!
 // @author       commiehunter
@@ -12,6 +12,7 @@
 (function() {
     'use strict';
 /*
+0.12  * Stronger alcohol! optimized pathfinder - stumble over whole Norkos!
 0.11  * Step into the 21st century and clean cache before OOM happens!
       * Attempt at fixing map loading on map change
       
@@ -98,7 +99,8 @@
         }
     }
     function PathFinder(){
-        this._maxRunTimeMs = 100;
+        this._maxRunCount = 120;
+        this._maxRunTimeMs = 500;
         this._state = null;
         this._currentIdx = null;
         this._currentRadius = 0;
@@ -126,8 +128,6 @@
             var player = app.state.player.value;
         
             var currentMap = player.map;
-            
-            
             if (!_currentCachedMap || _currentCachedMap.mapName != currentMap){
                 reloadCachedMap();
             }
@@ -135,7 +135,6 @@
                 console.log("ERROR, failed to load map data for " + currentMap);
                 return; //no map cache
             }
-            
             var startTime = (new Date()).getTime();
             var data = _currentCachedMap.data;
             var t = data.layers[0]; //terrain
@@ -148,12 +147,20 @@
                     target: _target,
                     targetIdx: targetIdx,
                     data : [],
-                    radius: 0,
+                    radius: 1,
                     done: false,
                     width: data.width,
                     createdTime:startTime,
+                    scoreQueue:[],
+					runCount:0,
+                    invalid:false
                 };
             }
+            if (currentPath.invalid){
+                console.log("ERROR: no path");
+                return;
+            }
+			currentPath.runCount++;
             currentPath.data[targetIdx] = 1;
             currentPath.lastUsedTime = startTime;
             //
@@ -168,111 +175,82 @@
             if (currentPath.done ){
                 return currentPath; //done
             }
-            var maxRadius = Math.max(data.height, data.width) - 1;
-            
-            var r = currentPath.radius; //start from here
-            var dbgInfo = {secondPassCount :0};
-            var dbgStats = dbgInfo.stats = [];
+            var maxRadius = Math.max(data.height, data.width);
             var me = this;
-            do{
-                r++;
-                var dbg = {r: r, passStats:[]};
-                dbgStats.push(dbg);
-                var currentCircle = this.circleIndexes(_target, r, b);
-                var noneFoundThisCircle = true;
-                var allDoneThisCircle = true;
-                //
-                var passes = [currentCircle, _.reverse(currentCircle)]; //reverse pass for mazes
-                //
-                _.forEach(passes, function(currentPass, passIndex){
-                    var dbgCurrPass = dbg.passStats[passIndex] = {};
-                    var blockedCountThisPass = 0; //Count cells that were marked blocked from this circle only, exclude neighbour loading
-                    var scoredCountThisPass = 0;
-                    var alreadyScoredThisPass = 0;
-                    _.forEach(currentPass, function(cell){
-                        var blockValue = parseInt(b.data[cell.i]);
-                        if (blockValue > 0){
-                            currentPath.data[cell.i] = -blockValue;
-                            blockedCountThisPass++;
-                        }else{
-                            if (!currentPath.data[cell.i] || !isNaN(currentPath.data[cell.i])){
-                                currentPath.data[cell.i] = 0;
-                            }
-                            if (!currentPath.data[cell.i]){ //is ist scored yet?
-                                var cellNeighbours = me.circleIndexes(cell, 1, b);
-                                var scorableWalkableNeigbours = [];
-                                var scoredWalkableNeighbours = [];
-                                _.forEach(cellNeighbours, function(cn){
-                                    if (currentPath.data[cn.i] === undefined){
-                                        currentPath.data[cn.i] = -b.data[cn.i]; //load from blocked
-                                    }
-                                    if (currentPath.data[cn.i] > 0){
-                                        scoredWalkableNeighbours.push(cn);
-                                    }
-                                    if(currentPath.data[cn.i] >= 0){
-                                        scorableWalkableNeigbours.push(cn);
-                                    }
-                                });
-                                if (scoredWalkableNeighbours.length){
-                                    var neighboursByScore = _.sortBy(scoredWalkableNeighbours, function(cn){
-                                            return currentPath.data[cn.i];
-                                    });
-                                    var bestNeighbourCell = _.first(neighboursByScore);
-                                    var bestNeighbourScore = currentPath.data[bestNeighbourCell.i];
-                                    var ourScore = bestNeighbourScore + 1;
-                                    currentPath.data[cell.i] = ourScore;
-                                    scoredCountThisPass++;
-                                    if (scoredWalkableNeighbours.length > 1){ //Can also rescore some of the neighbours
-                                        _.forEach(scoredWalkableNeighbours, function(cn){
-                                            if (currentPath.data[cn.i] === 0){ //not scored, award ours + 1
-                                                currentPath.data[cn.i] = ourScore + 1;
-                                            }else if (currentPath.data[cn.i] > ourScore +1){
-                                                currentPath.data[cn.i] = ourScore + 1; // alternative, better path found
-                                            }
-                                        });
-                                    }
-                                }
-                            }else{
-                                alreadyScoredThisPass++;
-                            }
+            tNow = (new Date()).getTime();
+            var dbgArray = [];
+            while(tNow < killTime && !currentPath.done && !currentPath.invalid){
+                var dbg = {}; dbgArray.push(dbg);
+                if (currentPath.radius < maxRadius){
+                    var currentCircle = this.circleIndexes(_target, currentPath.radius, b);
+                    _.forEach(currentCircle, function(cell){
+                        currentPath.data[cell.i] = -b.data[cell.i];
+                        if (currentPath.data[cell.i] ===0){
+                            currentPath.scoreQueue.push(cell);
+                        }
+                        return true;
+                    });
+                }
+                var noneScored = true;
+                var ql = currentPath.scoreQueue.length;
+                var largestScoreThisLoop = 0;
+                var reAddToQueue = [];
+                currentPath.scoreQueue = _.filter(currentPath.scoreQueue, function(cell){
+                    var cellNeighbours = me.circleIndexes(cell, 1, b);
+                    var scorableWalkableNeigbours = [];
+                    var scoredWalkableNeighbours = [];
+                    _.forEach(cellNeighbours, function(cn){
+                        if (currentPath.data[cn.i] > 0){
+                            scoredWalkableNeighbours.push(cn);
+                        }
+                        if(currentPath.data[cn.i] >= 0){
+                            scorableWalkableNeigbours.push(cn);
                         }
                     });
-                    allDoneThisCircle = blockedCountThisPass + scoredCountThisPass + alreadyScoredThisPass == currentCircle.length;
-                    var currentPassResults = _.map(currentPass, function(dn){
-                        var score = currentPath.data[dn.i];
-                        var dobj = {x: dn.x, y:dn.y, i: dn.i, score:score};
-                        return dobj;
-                    });
-                    
-                    dbgCurrPass.anomalous = _.reject(currentPassResults, function(dn){
-                        return dn.score > 0 || dn.score <= -1;
-                    });
-                    
-                    noneFoundThisCircle = scoredCountThisPass === 0;
-                    dbgCurrPass.blockedCountThisPass = blockedCountThisPass;
-                    dbgCurrPass.scoredCountThisPass = scoredCountThisPass;
-                    dbgCurrPass.noneFoundThisCircle = noneFoundThisCircle;
-                    dbgCurrPass.allDoneThisCircle = allDoneThisCircle;
-                    dbgCurrPass.currentCircleLength = currentCircle.length;
-                    dbgCurrPass.alreadyScoredThisPass = alreadyScoredThisPass;
-                    if (scoredCountThisPass > 0 && !allDoneThisCircle){
-                        dbgInfo.secondPassCount++;
-                        return true; //Found some, but not all - do 2nd, reverse pass
+                    if (scoredWalkableNeighbours.length){
+                        var neighboursByScore = _.sortBy(scoredWalkableNeighbours, function(cn){
+                            return currentPath.data[cn.i];
+                        });
+                        var bestNeighbourCell = _.first(neighboursByScore);
+                        var bestNeighbourScore = currentPath.data[bestNeighbourCell.i];
+                        var ourScore = bestNeighbourScore + 1;
+                        largestScoreThisLoop = Math.max(largestScoreThisLoop, ourScore);
+                        currentPath.data[cell.i] = ourScore;
+                        noneScored = false;
+                        if (scorableWalkableNeigbours.length > 1){ //Can also rescore some of the neighbours
+                            _.forEach(scorableWalkableNeigbours, function(cn){
+                                if (currentPath.data[cn.i] === 0){ //not scored, award ours + 1
+                                    currentPath.data[cn.i] = ourScore + 1;
+                                }else if (currentPath.data[cn.i] > ourScore +1){
+                                    currentPath.data[cn.i] = ourScore + 1; // alternative, better path found 
+                                    reAddToQueue.push(cn);
+                                }
+                            });
+                        }
+                        return false; //done with this one
                     }
-                    return false; //No need for 2nd pass
+                    return true; //try again later
+				});
+                _.forEach(reAddToQueue, function(cn){
+                    currentPath.scoreQueue.push(cn);
                 });
-                // if (allDoneThisCircle && r<maxRadius){ TODO: fix and turn on again
-                //     currentPath.radius = r; //no need to redo from scratch
-                // }
-                if (noneFoundThisCircle || r > maxRadius){
-                    r = currentPath.radius; //reset radius to rewalk the maze
-                }
+                dbg.info = "R: "+ currentPath.radius + " QL:" + ql + "->" + currentPath.scoreQueue.length +" LScore: " + largestScoreThisLoop + " betterPaths:" + reAddToQueue.length;
+                //Loop end
+                currentPath.radius++;
+                currentPath.radius = Math.min(currentPath.radius, maxRadius);
                 currentPath.done  = _.every(playerNeighbours, function(n){
-                    return currentPath.data[n] !== undefined && currentPath.data[n] !== 0;
+                    //console.log("N:" + JSON.stringify(n) + " s:" + currentPath.data[n.i]);
+                    return currentPath.data[n.i] !== undefined && currentPath.data[n.i] !== 0;
                 });
+                if (noneScored && !currentPath.done){
+                    currentPath.invalid = true;
+                }
                 tNow = (new Date()).getTime();
-            }while(tNow < killTime && !currentPath.done && r < maxRadius);
-            console.log("PF loop done in "+ (tNow - startTime) + "ms R:"+r +"(" + maxRadius + ") done:"+currentPath.done, currentPath); //,"Dbg:", dbgInfo);
+            }
+            if (currentPath.runCount > this._maxRunCount){
+                currentPath.invalid = true;
+            }
+            console.log("PF loop done in "+ (tNow - startTime) + "ms R:"+currentPath.radius +"(" + maxRadius + ") done:"+currentPath.done + " runCount:" +currentPath.runCount + " qlen:"+currentPath.scoreQueue.length, currentPath,"Dbg:", dbgArray);
             return currentPath;
         };
 
@@ -415,7 +393,6 @@
                 return;
             }
         }
-        
         var newCoords = {x: player.x, y: player.y, map:player.map, mapRegion:player.mapRegion};
         if (newCoords.x == _target.x && newCoords.y == _target.y){
             _target = null;
@@ -429,7 +406,6 @@
         }
         var stumbledUsingPath = false;
         var path = false;
-        
         var currentScore = 0;
         var projectedScore = 0;
         var projectedCoords = {};
@@ -444,8 +420,6 @@
                     var dx = newCoords.x - _prevCoords.x;
                     var dy = newCoords.y - _prevCoords.y;
                     projectedCoords = {x:newCoords.x + dx, y:newCoords.y + dy};
-                    
-                    
                     if (path && path.done){
                         var projectedIndex = projectedCoords.y * path.width + projectedCoords.x;
                         projectedScore = path.data[projectedIndex];
@@ -453,6 +427,7 @@
                         currentScore = path.data[currentIndex];
                         if (projectedScore !== undefined && projectedScore !== 0){
                             stumbledUsingPath = true;
+                            currentDistance = currentScore -1;
                             if (projectedScore < currentScore){
                                 newDrunkState = false;
                             }else{
@@ -476,7 +451,7 @@
                     setDrunkState(newDrunkState);
                 }
                 _previousDistance = currentDistance;
-            var displayDistance = Math.round(currentDistance * 100)/100;
+                var displayDistance = Math.round(currentDistance * 100)/100;
 
                 var mapTitle = "TARGET:"+ _target.x + ", " + _target.y + " D:" + displayDistance + " DRUNK:" + newDrunkState + " PATH:" + stumbledUsingPath;
                 console.log("moving from "+ newCoords.x + ", "+ newCoords.y +  " to " + mapTitle + " current tile score: "+ currentScore + " next tile: "+ projectedScore + "["+ projectedCoords.x + ","+ projectedCoords.y +"]");
@@ -505,6 +480,8 @@
     }
     //
     function mainInit(){
+        window.PhaserGlobal = {   hideBanner: true }; //hide phaser.io spam
+        
         console.log("mainInit");
         var target = document.getElementsByTagName('ion-nav')[0];
         // create an observer instance
