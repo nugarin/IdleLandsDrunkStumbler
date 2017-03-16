@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IdleLandDrunkStumbler
 // @namespace    http://tampermonkey.net/
-// @version      0.12
+// @version      0.13
 // @require     http://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js
 // @description  Guide your "hero" using the power of alcohol!
 // @author       commiehunter
@@ -12,6 +12,7 @@
 (function() {
     'use strict';
 /*
+0.13  * Optimize
 0.12  * Stronger alcohol! optimized pathfinder - stumble over whole Norkos!
 0.11  * Step into the 21st century and clean cache before OOM happens!
       * Attempt at fixing map loading on map change
@@ -99,7 +100,7 @@
         }
     }
     function PathFinder(){
-        this._maxRunCount = 120;
+        this._maxNoneScoredCount = 3;
         this._maxRunTimeMs = 500;
         this._state = null;
         this._currentIdx = null;
@@ -153,6 +154,7 @@
                     createdTime:startTime,
                     scoreQueue:[],
 					runCount:0,
+                    noneScoredCount:0,
                     invalid:false
                 };
             }
@@ -176,11 +178,15 @@
                 return currentPath; //done
             }
             var maxRadius = Math.max(data.height, data.width);
+            var maxNoneScoredCount = Math.max(3, maxRadius/10);
+            
             var me = this;
             tNow = (new Date()).getTime();
             var dbgArray = [];
+            var loopIdx = 0;
             while(tNow < killTime && !currentPath.done && !currentPath.invalid){
                 var dbg = {}; dbgArray.push(dbg);
+                loopIdx++;
                 if (currentPath.radius < maxRadius){
                     var currentCircle = this.circleIndexes(_target, currentPath.radius, b);
                     _.forEach(currentCircle, function(cell){
@@ -195,8 +201,24 @@
                 var ql = currentPath.scoreQueue.length;
                 var largestScoreThisLoop = 0;
                 var reAddToQueue = [];
-                currentPath.scoreQueue = _.filter(currentPath.scoreQueue, function(cell){
-                    var cellNeighbours = me.circleIndexes(cell, 1, b);
+                var reverse = (loopIdx + currentPath.runCount) % 2 === 0;
+                var scoreKeys = Object.keys(currentPath.scoreQueue);
+                var startIdx = 0;
+                var endIdx = scoreKeys.length;
+                var inc = 1;
+                if (reverse){
+                    startIdx = scoreKeys.length -1;
+                    endIdx = -1;
+                    inc = -1;
+                }
+                var betterPaths = 0;
+                for (var i = startIdx; i != endIdx; i+=inc){
+                    var queueIndex = scoreKeys[i];
+                    var cell = currentPath.scoreQueue[queueIndex];
+                    var cellNeighbours = cell.neighbours;
+                    if (!cellNeighbours){
+                        cellNeighbours = cell.neighbours = me.circleIndexes(cell, 1, b);
+                    }
                     var scorableWalkableNeigbours = [];
                     var scoredWalkableNeighbours = [];
                     _.forEach(cellNeighbours, function(cn){
@@ -216,25 +238,23 @@
                         var ourScore = bestNeighbourScore + 1;
                         largestScoreThisLoop = Math.max(largestScoreThisLoop, ourScore);
                         currentPath.data[cell.i] = ourScore;
+                        delete currentPath.scoreQueue[queueIndex];
                         noneScored = false;
                         if (scorableWalkableNeigbours.length > 1){ //Can also rescore some of the neighbours
                             _.forEach(scorableWalkableNeigbours, function(cn){
                                 if (currentPath.data[cn.i] === 0){ //not scored, award ours + 1
                                     currentPath.data[cn.i] = ourScore + 1;
                                 }else if (currentPath.data[cn.i] > ourScore +1){
-                                    currentPath.data[cn.i] = ourScore + 1; // alternative, better path found 
-                                    reAddToQueue.push(cn);
+                                    currentPath.data[cn.i] = ourScore + 1; // alternative, better path found
+                                    currentPath.scoreQueue.push(cn);
+                                    betterPaths++;
                                 }
                             });
                         }
-                        return false; //done with this one
                     }
-                    return true; //try again later
-				});
-                _.forEach(reAddToQueue, function(cn){
-                    currentPath.scoreQueue.push(cn);
-                });
-                dbg.info = "R: "+ currentPath.radius + " QL:" + ql + "->" + currentPath.scoreQueue.length +" LScore: " + largestScoreThisLoop + " betterPaths:" + reAddToQueue.length;
+                }
+                currentPath.scoreQueue = _.compact(currentPath.scoreQueue);
+                dbg.info = "R: "+ currentPath.radius + " QL:" + ql + "->" + currentPath.scoreQueue.length +" LScore: " + largestScoreThisLoop + " betterPaths:" + betterPaths + " reverse:"+reverse;
                 //Loop end
                 currentPath.radius++;
                 currentPath.radius = Math.min(currentPath.radius, maxRadius);
@@ -242,12 +262,14 @@
                     //console.log("N:" + JSON.stringify(n) + " s:" + currentPath.data[n.i]);
                     return currentPath.data[n.i] !== undefined && currentPath.data[n.i] !== 0;
                 });
-                if (noneScored && !currentPath.done){
-                    currentPath.invalid = true;
+                if (currentPath.scoreQueue.length >= ql && !currentPath.done){
+                    currentPath.noneScoredCount++;
+                }else{
+                    currentPath.noneScoredCount = 0;
                 }
                 tNow = (new Date()).getTime();
             }
-            if (currentPath.runCount > this._maxRunCount){
+            if (currentPath.noneScoredCount > maxNoneScoredCount){
                 currentPath.invalid = true;
             }
             console.log("PF loop done in "+ (tNow - startTime) + "ms R:"+currentPath.radius +"(" + maxRadius + ") done:"+currentPath.done + " runCount:" +currentPath.runCount + " qlen:"+currentPath.scoreQueue.length, currentPath,"Dbg:", dbgArray);
