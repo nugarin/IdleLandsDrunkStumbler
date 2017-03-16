@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IdleLandDrunkStumbler
 // @namespace    http://tampermonkey.net/
-// @version      0.13
+// @version      0.14
 // @require     http://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js
 // @description  Guide your "hero" using the power of alcohol!
 // @author       commiehunter
@@ -12,6 +12,7 @@
 (function() {
     'use strict';
 /*
+0.14  * Fix cleaner
 0.13  * Optimize
 0.12  * Stronger alcohol! optimized pathfinder - stumble over whole Norkos!
 0.11  * Step into the 21st century and clean cache before OOM happens!
@@ -114,7 +115,7 @@
             _.forEach(this._cachedPaths, function(cp, idx){
                 var tNow = (new Date()).getTime();
                 if (cp.lastUsedTime + me._cacheTTL < tNow){
-                    delete this._cachedPaths[idx];
+                    delete me._cachedPaths[idx];
                     console.log("cleaned path " + idx + " from cache");
                 }
             });
