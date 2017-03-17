@@ -176,7 +176,7 @@
             var playerNeighbours = this.circleIndexes(player, 1, b);
             currentPath.done  = _.every(playerNeighbours, function(n){
                 if(currentPath.data[n.i] === undefined){
-                    currentPath.data[n.i] = -b.data[nw.i];
+                    currentPath.data[n.i] = -b.data[n.i];
                 }
                 return currentPath.data[n.i] !== undefined && currentPath.data[n.i] !== 0;
             });
