@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IdleLandDrunkStumbler
 // @namespace    http://tampermonkey.net/
-// @version      0.14
+// @version      0.15
 // @require     http://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js
 // @description  Guide your "hero" using the power of alcohol!
 // @author       commiehunter
@@ -11,7 +11,9 @@
 
 (function() {
     'use strict';
+
 /*
+0.15  * Tweaks
 0.14  * Fix cleaner
 0.13  * Optimize
 0.12  * Stronger alcohol! optimized pathfinder - stumble over whole Norkos!
@@ -101,7 +103,7 @@
         }
     }
     function PathFinder(){
-        this._maxNoneScoredCount = 3;
+        this._maxNoneScoredCount = 10;
         this._maxRunTimeMs = 500;
         this._state = null;
         this._currentIdx = null;
@@ -173,20 +175,23 @@
             //
             var playerNeighbours = this.circleIndexes(player, 1, b);
             currentPath.done  = _.every(playerNeighbours, function(n){
+                if(currentPath.data[n.i] === undefined){
+                    currentPath.data[n.i] = -b.data[nw.i];
+                }
                 return currentPath.data[n.i] !== undefined && currentPath.data[n.i] !== 0;
             });
             if (currentPath.done ){
                 return currentPath; //done
             }
             var maxRadius = Math.max(data.height, data.width);
-            var maxNoneScoredCount = Math.max(3, maxRadius/10);
-            
+            var maxNoneScoredCount = Math.max(3, maxRadius/2);
             var me = this;
             tNow = (new Date()).getTime();
             var dbgArray = [];
             var loopIdx = 0;
             while(tNow < killTime && !currentPath.done && !currentPath.invalid){
                 var dbg = {}; dbgArray.push(dbg);
+                var added = 0;
                 loopIdx++;
                 if (currentPath.radius < maxRadius){
                     var currentCircle = this.circleIndexes(_target, currentPath.radius, b);
@@ -194,6 +199,7 @@
                         currentPath.data[cell.i] = -b.data[cell.i];
                         if (currentPath.data[cell.i] ===0){
                             currentPath.scoreQueue.push(cell);
+                            added++;
                         }
                         return true;
                     });
@@ -263,8 +269,8 @@
                     //console.log("N:" + JSON.stringify(n) + " s:" + currentPath.data[n.i]);
                     return currentPath.data[n.i] !== undefined && currentPath.data[n.i] !== 0;
                 });
-                if (currentPath.scoreQueue.length >= ql && !currentPath.done){
-                    currentPath.noneScoredCount++;
+                if ((currentPath.scoreQueue.length >= (ql -added)) && !currentPath.done){
+                    //currentPath.noneScoredCount++;
                 }else{
                     currentPath.noneScoredCount = 0;
                 }
@@ -418,7 +424,7 @@
         }
         var newCoords = {x: player.x, y: player.y, map:player.map, mapRegion:player.mapRegion};
         if (newCoords.x == _target.x && newCoords.y == _target.y){
-            _target = null;
+            //_target = null;
             setMapTitle("ARRIVED!");
             return;
         }
