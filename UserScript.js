@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IdleLandDrunkStumbler
 // @namespace    http://tampermonkey.net/
-// @version      0.17
+// @version      0.18
 // @require     http://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js
 // @description  Guide your "hero" using the power of alcohol!
 // @author       commiehunter
@@ -13,6 +13,7 @@
     'use strict';
 
 /*
+0.18  * Unreachable paths handled
 0.17  * More complex targeting
       * Settings
       * Save and load settings
@@ -89,12 +90,24 @@
 			}
 		};
 		//Expect
-		// map,x,y OR
+		// x,y,[map],[repeat]
 		// object with the same keys
 		this.setTarget = function(){
             var targetObject = 0;
-			if (arguments.length == 3){
-                targetObject = {map: arguments[0], x: arguments[1], y:arguments[2]};
+            var app = _cp.MyApp;
+            var player = app.state.player.value;
+            var map = player.map;
+            var repeat = false;
+			if (arguments.length >= 2){
+                if (arguments.length >2){
+                    if(arguments[2]){
+                        map = arguments[2];
+                    }
+                }
+                if (arguments.length >3){
+                    repeat = arguments[3];
+                }
+                targetObject = {map: map, x: arguments[0], y:arguments[1], repeat:repeat};
 			}else{
                 targetObject = arguments[0];
 			}
@@ -238,13 +251,8 @@
                     createdTime:startTime,
                     scoreQueue:[],
 					runCount:0,
-                    noneScoredCount:0,
-                    invalid:false
+                    allScored:false
                 };
-            }
-            if (currentPath.invalid){
-                console.log("ERROR: no path");
-                return;
             }
 			currentPath.runCount++;
             currentPath.data[targetIdx] = 1;
@@ -261,16 +269,15 @@
                 }
                 return currentPath.data[n.i] !== undefined && currentPath.data[n.i] !== 0;
             });
-            if (currentPath.done ){
+            if (currentPath.done || currentPath.allScored){
                 return currentPath; //done
             }
             var maxRadius = Math.max(data.height, data.width);
-            var maxNoneScoredCount = Math.max(3, maxRadius/2);
             var me = this;
             tNow = (new Date()).getTime();
             var dbgArray = [];
             var loopIdx = 0;
-            while(tNow < killTime && !currentPath.done && !currentPath.invalid){
+            while(tNow < killTime && !currentPath.done && !currentPath.allScored){
                 var dbg = {}; dbgArray.push(dbg);
                 var added = 0;
                 loopIdx++;
@@ -350,15 +357,12 @@
                     //console.log("N:" + JSON.stringify(n) + " s:" + currentPath.data[n.i]);
                     return currentPath.data[n.i] !== undefined && currentPath.data[n.i] !== 0;
                 });
-                if ((currentPath.scoreQueue.length >= (ql -added)) && !currentPath.done){
-                    //currentPath.noneScoredCount++;
-                }else{
-                    currentPath.noneScoredCount = 0;
+                if (noneScored){
+                    currentPath.allScored = true;
+                    console.log("Path all done, with %s items left in score queue",currentPath.scoreQueue.length);
+                    currentPath.scoreQueue = []; //clear it
                 }
                 tNow = (new Date()).getTime();
-            }
-            if (currentPath.noneScoredCount > maxNoneScoredCount){
-                currentPath.invalid = true;
             }
             console.log("PF loop done in "+ (tNow - startTime) + "ms R:"+currentPath.radius +"(" + maxRadius + ") done:"+currentPath.done + " runCount:" +currentPath.runCount + " qlen:"+currentPath.scoreQueue.length, currentPath,"Dbg:", dbgArray);
             return currentPath;
@@ -554,6 +558,12 @@
                path = _pf.findPath(target);
                if (_prevCoords.x == newCoords.x && _prevCoords.y == newCoords.y){
                    return; //hasn't moved yet
+               }
+               if (path && !path.done && path.allScored){
+                   console.log("current target %s unreachable at the moment, moving to the back", JSON.stringify(target));
+                   targetArray.shift();
+                   targetArray.push(target);
+                   return;
                }
                var dx = newCoords.x - _prevCoords.x;
                var dy = newCoords.y - _prevCoords.y;
