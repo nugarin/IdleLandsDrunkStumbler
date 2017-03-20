@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IdleLandDrunkStumbler
 // @namespace    http://tampermonkey.net/
-// @version      0.16
+// @version      0.17
 // @require     http://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js
 // @description  Guide your "hero" using the power of alcohol!
 // @author       commiehunter
@@ -13,6 +13,10 @@
     'use strict';
 
 /*
+0.17  * More complex targeting
+      * Settings
+      * Save and load settings
+
 0.16  * Tweaks
 0.15  * Tweaks
 0.14  * Fix cleaner
@@ -29,19 +33,101 @@
      * Apparently not all "blockers" were actually blockers
 */
 
-    //Double click on the map to set target
-    //Single click on the map to clear target
+    //CTRL+click on the map to set repeating target
+    //click on the map to set a target to be visited once
+    //long click on the map to clear targets for current map
     
     
     console.log("IdleLandDrunkStumbler active");
-    var _leavePartyIfNotLeaderAndHaveTarget = true;
-    var _confiscatePetGold = true;
-    var _target = null;
     var _previousDistance = null;
     
     $ = jQuery = jQuery.noConflict(true);
-    
-    
+	
+	// function MapTarget(){
+		// Object.defineProperties(this, {
+		  // 'x': {
+			// value: null,
+			// writable: true, enumerable:true,
+		  // },
+		  // 'y': {
+			// value: null,
+			// writable: true, enumerable:true,
+		  // },
+		  // 'map': {
+			// value: null,
+			// writable: true, enumerable:true,
+		  // }
+		// });
+	// }
+	function DrunkStumblerSettings(){
+		var key = "DrunkStumblerSettings";
+		this.load = function(){
+			var str = localStorage.getItem(key);
+			if (str){
+				var deserialised = JSON.parse(str);
+				if (deserialised){
+					Object.keys(this).forEach(function(k){
+						if (deserialised.hasOwnProperty(k)){
+							this[k] = deserialised[k];
+						}
+					},this);
+				}
+			}
+		};
+		this.save = function(){
+			var str = JSON.stringify(this);
+			localStorage.setItem(key, str);
+		};
+		//Clears targets for map if specified, all targets otherwise
+		this.clearTargets = function(map){
+			if (map){
+				if (this.MapTargets && this.MapTargets[map]){
+					delete this.MapTargets[map];
+				}
+			}else{
+				this.MapTargets = {};
+			}
+		};
+		//Expect
+		// map,x,y OR
+		// object with the same keys
+		this.setTarget = function(){
+            var targetObject = 0;
+			if (arguments.length == 3){
+                targetObject = {map: arguments[0], x: arguments[1], y:arguments[2]};
+			}else{
+                targetObject = arguments[0];
+			}
+            if (!this.MapTargets[targetObject.map] || !_.isArray(this.MapTargets[targetObject.map])){
+                this.MapTargets[targetObject.map] = [];
+            }
+            this.MapTargets[targetObject.map].push(targetObject);
+		};
+		Object.defineProperties(this, {
+		  'LeavePartyIfNotLeaderAndHaveTarget': {
+			value: true,
+			writable: true, enumerable:true,
+		  },
+		  'ConfiscatePetGold': {
+			value: true,
+			writable: true, enumerable:true,
+		  },
+		  'ClearTargetOnArrival': {
+			value: false,
+			writable: true, enumerable:true,
+		  },
+		  'MapTargets': {
+			value: {},
+			writable: true, enumerable:true,
+		  }
+		});
+	}
+	window.DrunkStumblerSettings = DrunkStumblerSettings;
+	if (!window.DrunkStumblerSettingsInstance){
+		window.DrunkStumblerSettingsInstance = new DrunkStumblerSettings();
+	}
+	var _settings = window.DrunkStumblerSettingsInstance;
+	_settings.load();
     function ComponentProvider(){
         this.find = function (search){
             var n = ng.probe($(search)[0]);
@@ -87,7 +173,6 @@
             }
         }
     }
-    
     function initMap(){
         console.log("initMap");
         var mapInstance = _cp.MapPage;
@@ -96,13 +181,9 @@
         }
         reloadCachedMap();
         var mapCanvas = $("canvas");
-        mapCanvas[0].addEventListener("dblclick", setDrunkWalkTarget);
-        mapCanvas[0].addEventListener("click", clearDrunkWalkTarget);
-
-        if (_target){
-            var mapTitle = "Current target: " + _target.x + ", " + _target.y;
-            setMapTitle(mapTitle);
-        }
+        //mapCanvas[0].addEventListener("click", handleDrunkWalkTargets);
+        mapCanvas[0].addEventListener("mousedown", handleDrunkWalkTargets);
+        mapCanvas[0].addEventListener("mouseup", handleDrunkWalkTargets);
     }
     function PathFinder(){
         this._maxNoneScoredCount = 10;
@@ -113,7 +194,6 @@
         this._cachedPaths = {};
         this._unwalkableVal = 100000000;
         this._cacheTTL = 60 * 60 * 1000;
-            
         this.cleanCache = function (){
             var me = this;
             _.forEach(this._cachedPaths, function(cp, idx){
@@ -125,9 +205,9 @@
             });
         };
         //Updates path when needed
-        this.findPath = function(){
+        this.findPath = function(target){
             this.cleanCache();//TODO: less often
-            if (!_target){
+            if (!target){
                 return; //nothing to do
             }
             var app = _cp.MyApp;
@@ -144,12 +224,12 @@
             var data = _currentCachedMap.data;
             var t = data.layers[0]; //terrain
             var b = data.layers[1]; //blockers
-            var cacheKey = currentMap + "_" + _target.x + "_" + _target.y;
+            var cacheKey = currentMap + "_" + target.x + "_" + target.y;
             var currentPath = this._cachedPaths[cacheKey];
-            var targetIdx = this.coordsToIndex(_target, data);
+            var targetIdx = this.coordsToIndex(target, data);
             if (!currentPath){
                 this._cachedPaths[cacheKey] = currentPath = {
-                    target: _target,
+                    target: target,
                     targetIdx: targetIdx,
                     data : [],
                     radius: 1,
@@ -195,7 +275,7 @@
                 var added = 0;
                 loopIdx++;
                 if (currentPath.radius < maxRadius){
-                    var currentCircle = this.circleIndexes(_target, currentPath.radius, b);
+                    var currentCircle = this.circleIndexes(currentPath.target, currentPath.radius, b);
                     _.forEach(currentCircle, function(cell){
                         currentPath.data[cell.i] = -b.data[cell.i];
                         if (currentPath.data[cell.i] ===0){
@@ -359,13 +439,12 @@
          return coords.x + coords.y * data.width;
      };
     }
-    
     var _pf = new PathFinder();
     function distance(c0, c1){
         var sqr = Math.pow(c0.x - c1.x,  2) + Math.pow(c0.y - c1.y, 2);
         if (sqr === 0){
             return 0;
-        }        
+        }
         return Math.sqrt(sqr);
     }
     function getCoordsFromString(t, fromText){
@@ -381,15 +460,33 @@
         }
         return null;
     }
-    function clearDrunkWalkTarget(evt){
-        console.log("clearing target");
-        _target = null;
-        setMapTitle("TARGET:NONE");
+    var _clearTargetTimeoutId = 0;
+    var _clearTargetTimeoutLengthInMs = 1000;
+    function handleDrunkWalkTargets(evt){
+        //console.log(evt);
+        if (evt.type == "mousedown"){
+            clearTimeout(_clearTargetTimeoutId);
+            _clearTargetTimeoutId = setTimeout(function(){
+                var app = _cp.MyApp;
+                var player = app.state.player.value;
+                var mapName = player.map;
+                _settings.clearTargets(mapName);
+                _settings.save();
+                console.log("CLEARED targets for %s", mapName);
+                setMapTitle("CLEARED TARGETS FOR " + mapName);
+                _clearTargetTimeoutId = null;
+            }, _clearTargetTimeoutLengthInMs);
+        }else if (evt.type == "mouseup"){
+            if (_clearTargetTimeoutId){
+                setDrunkWalkTargets(evt);
+            }
+            clearTimeout(_clearTargetTimeoutId);
+        }
     }
-    function setDrunkWalkTarget(){
-        console.log("setting target");
+    function setDrunkWalkTargets(evt){
         var app = _cp.MyApp;
         var player = app.state.player.value;
+		var mapName = player.map;
         var mapInstance = _cp.MapPage;
         if (!mapInstance){
             return;
@@ -398,15 +495,13 @@
         var tc = getCoordsFromString(t, "Hovering ");
         tc.map = player.map;
         tc.mapRegion = player.mapRegion;
-        var cc = {x:player.x, y:player.y, map:player.map};
-        if (tc){
-            setMapTitle("Target X:" + tc.x + "[" + (tc.x - cc.x) + "] Y:" + tc.y + "["+ (tc.y - cc.y) + "]");
-            _target = tc;
-        }
-        console.log("should drunk walk to " + mapInstance.mapText, tc, cc);
+        tc.repeat = evt.ctrlKey; //Add a repeating target if ctrl is held
+        _settings.setTarget(tc);
+        console.log("ADDED TARGET FOR %s [%s,%s] Repeating:%s", mapName,tc.x,tc.y, tc.repeat);
+        _settings.save();
     }
     function handlePet(){
-        if (!_confiscatePetGold){
+        if (!_settings.ConfiscatePetGold){
             return;
         }
          var app = _cp.MyApp;
@@ -419,16 +514,19 @@
     var _prevCoords = null;
     //Run on interval of 1 second
     function drunkWalkCheckPulse(){
-        if (!_target){
-            return;
-        }
         handlePet();//TODO: own timer
         var app = _cp.MyApp;
         var player = app.state.player.value;
         var party = app.state.party.value;
+		var currentMapName = player.map;
+        var targetArray = _settings.MapTargets[currentMapName];
+		if (!targetArray || targetArray.length === 0){
+			return;
+		}
+        var target = targetArray[0];
         if (party.players && party.players.length){
             if (party.players[0].shortName != player.name){
-                if (_leavePartyIfNotLeaderAndHaveTarget){
+                if (_settings.LeavePartyIfNotLeaderAndHaveTarget){
                     console.log("LEAVING PARTY, SINCE WE HAVE A TARGET");
                     app.primus.leaveParty();
                 }else{
@@ -437,18 +535,14 @@
                 return;
             }
         }
-        var newCoords = {x: player.x, y: player.y, map:player.map, mapRegion:player.mapRegion};
-        if (newCoords.x == _target.x && newCoords.y == _target.y){
-            //_target = null;
-            setMapTitle("ARRIVED!");
-            return;
-        }
-        if (newCoords.map != _target.map) { // || newCoords.mapRegion != _target.mapRegion){
-            if (_prevCoords && _prevCoords.map != newCoords.map){
-                _prevCoords = null;
+        var newCoords = {x: player.x, y: player.y, map:currentMapName, mapRegion:player.mapRegion};
+        if (newCoords.x == target.x && newCoords.y == target.y){
+            targetArray.shift();
+            if (target.repeat){
+                targetArray.push(target);
             }
-            _target = null;
-            setMapTitle("ERROR, MAP changed - expected " + _target.map + "/" + _target.mapRegion + " but we are on "+ newCoords.map + "/" + newCoords.mapRegion);
+            var arrivedText = "ARRIVED @ "+JSON.stringify(target)  + " REPEATING:" + target.repeat;
+            setMapTitle(arrivedText); console.log(arrivedText);
             return;
         }
         var stumbledUsingPath = false;
@@ -457,17 +551,16 @@
         var projectedScore = 0;
         var projectedCoords = {};
         if (_prevCoords){
-               path = _pf.findPath();
+               path = _pf.findPath(target);
                if (_prevCoords.x == newCoords.x && _prevCoords.y == newCoords.y){
                    return; //hasn't moved yet
                }
                var dx = newCoords.x - _prevCoords.x;
                var dy = newCoords.y - _prevCoords.y;
-                var currentDistance = distance(newCoords, _target);
+                var currentDistance = distance(newCoords, target);
                 var newDrunkState = null;
                 //console.log("DX:%s DY:%s PREVD:%s",dx,dy,_previousDistance);
                 if (_previousDistance && Math.abs(dx)<=1 && Math.abs(dy)<=1){
-                    
                     projectedCoords = {x:newCoords.x + dx, y:newCoords.y + dy};
                     if (path && path.done){
                         stumbledUsingPath = true;
@@ -509,14 +602,14 @@
                                 return cn.order == o1 || cn.order == o2;
                             });
                         }
-                        projectedScore = _.meanBy(nextLikelyNonDrunkTargets, function(cn){
+                        projectedScore = _.minBy(nextLikelyNonDrunkTargets, function(cn){
                             return cn.score;
-                        });
+                        }).score;
                         var previousScore = path.data[_prevCoords.i];
                         newDrunkState = previousScore <= projectedScore;
                     }else{
                         if (currentDistance <= _previousDistance){
-                            var projectedDistance = distance(projectedCoords, _target);
+                            var projectedDistance = distance(projectedCoords, target);
                             if (projectedDistance < currentDistance){
                                 newDrunkState = false;
                             }else{
@@ -530,8 +623,9 @@
                 }
                 _previousDistance = currentDistance;
                 var displayDistance = Math.round(currentDistance * 100)/100;
+                var targetText = _.join(_.map(targetArray, function(t){ return "[" + t.x + "," + t.y + "]"+ (t.repeat? "*":""); }),", ");
 
-                var mapTitle = "TARGET:"+ _target.x + ", " + _target.y + " D:" + displayDistance + " DRUNK:" + newDrunkState + " PATH:" + stumbledUsingPath;
+                var mapTitle = "TARGET:"+ targetText + " D:" + displayDistance + " DRUNK:" + newDrunkState + " PATH:" + stumbledUsingPath;
                 console.log("moving from "+ newCoords.x + ", "+ newCoords.y +  " to " + mapTitle + " current tile score: "+ currentScore + " next tile: "+ projectedScore + "["+ projectedCoords.x + ","+ projectedCoords.y +"]");
                 setMapTitle(mapTitle);
         }
@@ -540,9 +634,6 @@
     function toggleDrunk(primus){
         primus.togglePersonality("Drunk");
     }
-  
-    
-    
     function setDrunkState(targetState){
         var app = _cp.MyApp;
         var currentDrunkState = app.state.personalities.value.active.Drunk;
