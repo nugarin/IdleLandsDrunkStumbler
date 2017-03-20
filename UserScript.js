@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IdleLandDrunkStumbler
 // @namespace    http://tampermonkey.net/
-// @version      0.15
+// @version      0.16
 // @require     http://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js
 // @description  Guide your "hero" using the power of alcohol!
 // @author       commiehunter
@@ -13,6 +13,7 @@
     'use strict';
 
 /*
+0.16  * Tweaks
 0.15  * Tweaks
 0.14  * Fix cleaner
 0.13  * Optimize
@@ -33,7 +34,8 @@
     
     
     console.log("IdleLandDrunkStumbler active");
-    
+    var _leavePartyIfNotLeaderAndHaveTarget = true;
+    var _confiscatePetGold = true;
     var _target = null;
     var _previousDistance = null;
     
@@ -130,7 +132,6 @@
             }
             var app = _cp.MyApp;
             var player = app.state.player.value;
-        
             var currentMap = player.map;
             if (!_currentCachedMap || _currentCachedMap.mapName != currentMap){
                 reloadCachedMap();
@@ -293,7 +294,7 @@
          // We do these in a circle, so we can do a second pass in reverse
          // Top row
          y = centre.y - radius;
-         if (y > 0){
+         if (y >= 0){
              for(x = Math.max(centre.x - radius, 0); x<= Math.min(centre.x + radius, maxX); x++){
                  c = {x: x, y: y};
                  c.i = this.coordsToIndex(c, data);
@@ -302,7 +303,7 @@
          }
           // Right side
          x = centre.x + radius;
-         if (x < maxX){
+         if (x <= maxX){
              for (y = Math.max(centre.y - radius,0); y <= Math.min(centre.y + radius, maxY); y++){
                  c = {x: x, y: y};
                  c.i = this.coordsToIndex(c, data);
@@ -311,7 +312,7 @@
          }
          //Bottom row
          y = centre.y + radius;
-         if (y < maxY){
+         if (y <= maxY){
              for(x = Math.min(centre.x + radius, maxX); x >= Math.max(centre.x - radius, 0) ; x--){
                  c = {x: x, y: y};
                  c.i = this.coordsToIndex(c, data);
@@ -320,7 +321,7 @@
          }
          //Left side
          x = centre.x - radius;
-         if (x > 0){
+         if (x >= 0){
              for (y = Math.min(centre.y + radius, maxY); y >= Math.max(centre.y - radius, 0) ; y--){
                  c = {x: x, y: y};
                  c.i = this.coordsToIndex(c, data);
@@ -387,10 +388,8 @@
     }
     function setDrunkWalkTarget(){
         console.log("setting target");
-        
         var app = _cp.MyApp;
         var player = app.state.player.value;
-        
         var mapInstance = _cp.MapPage;
         if (!mapInstance){
             return;
@@ -406,19 +405,35 @@
         }
         console.log("should drunk walk to " + mapInstance.mapText, tc, cc);
     }
+    function handlePet(){
+        if (!_confiscatePetGold){
+            return;
+        }
+         var app = _cp.MyApp;
+         var petGold = app.state.petactive.value.gold.__current;
+         if (petGold){
+             console.log("CONFISCATING %s PET GOLD", petGold);
+             app.primus.takePetGold();
+         }
+    }
     var _prevCoords = null;
     //Run on interval of 1 second
     function drunkWalkCheckPulse(){
         if (!_target){
             return;
         }
+        handlePet();//TODO: own timer
         var app = _cp.MyApp;
         var player = app.state.player.value;
         var party = app.state.party.value;
         if (party.players && party.players.length){
             if (party.players[0].shortName != player.name){
-                console.log("ERROR. NOT A PARTY LEADER. CLEARING TARGET!");
-                _target = null;
+                if (_leavePartyIfNotLeaderAndHaveTarget){
+                    console.log("LEAVING PARTY, SINCE WE HAVE A TARGET");
+                    app.primus.leaveParty();
+                }else{
+                    console.log("ERROR. NOT A PARTY LEADER. WON'T STUMBLE!");
+                }
                 return;
             }
         }
@@ -429,6 +444,9 @@
             return;
         }
         if (newCoords.map != _target.map) { // || newCoords.mapRegion != _target.mapRegion){
+            if (_prevCoords && _prevCoords.map != newCoords.map){
+                _prevCoords = null;
+            }
             _target = null;
             setMapTitle("ERROR, MAP changed - expected " + _target.map + "/" + _target.mapRegion + " but we are on "+ newCoords.map + "/" + newCoords.mapRegion);
             return;
@@ -443,29 +461,60 @@
                if (_prevCoords.x == newCoords.x && _prevCoords.y == newCoords.y){
                    return; //hasn't moved yet
                }
+               var dx = newCoords.x - _prevCoords.x;
+               var dy = newCoords.y - _prevCoords.y;
                 var currentDistance = distance(newCoords, _target);
                 var newDrunkState = null;
-                if (_previousDistance){
-                    var dx = newCoords.x - _prevCoords.x;
-                    var dy = newCoords.y - _prevCoords.y;
+                //console.log("DX:%s DY:%s PREVD:%s",dx,dy,_previousDistance);
+                if (_previousDistance && Math.abs(dx)<=1 && Math.abs(dy)<=1){
+                    
                     projectedCoords = {x:newCoords.x + dx, y:newCoords.y + dy};
                     if (path && path.done){
-                        var projectedIndex = projectedCoords.y * path.width + projectedCoords.x;
-                        projectedScore = path.data[projectedIndex];
-                        var currentIndex = newCoords.y * path.width + newCoords.x;
-                        currentScore = path.data[currentIndex];
-                        if (projectedScore !== undefined && projectedScore !== 0){
-                            stumbledUsingPath = true;
-                            currentDistance = currentScore -1;
-                            if (projectedScore < currentScore){
-                                newDrunkState = false;
-                            }else{
-                                newDrunkState = true;
+                        stumbledUsingPath = true;
+                        projectedCoords.i = projectedCoords.y * path.width + projectedCoords.x;
+                        newCoords.i = newCoords.y * path.width + newCoords.x;
+                        newCoords.i = newCoords.y * path.width + newCoords.x;
+                        var data = _currentCachedMap.data;
+                        var b = data.layers[1]; //blockers
+                        var walkableNeighbours = _pf.circleIndexes(newCoords, 1, b);
+                        var ourTargetCellNeighbour = null;
+                        var nextStepNotBlocked = false;
+                        var nextLikelyNonDrunkTargets = [];
+                        currentDistance = currentScore = path.data[newCoords.i];
+                        _.forEach(walkableNeighbours, function(cn, i){
+                            cn.order = i; //0 - 7
+                            cn.score = path.data[cn.i];
+                            if (cn.i == projectedCoords.i){
+                                ourTargetCellNeighbour = cn;
+                                if (path.data[cn.i] > 0){
+                                    nextLikelyNonDrunkTargets.push(cn);
+                                }
                             }
+                        });
+                        walkableNeighbours = _.filter(walkableNeighbours, function(cn){
+                            return path.data[cn.i] > 0;
+                        });
+                        var orderDiff = 0;
+                        while(!nextLikelyNonDrunkTargets.length && orderDiff<3){
+                            orderDiff++;
+                            var o1 = ourTargetCellNeighbour.order - orderDiff;
+                            var o2 = ourTargetCellNeighbour.order + orderDiff;
+                            if (o1 < 0){
+                                o1 = 7;
+                            }
+                            if (o2>7){
+                                o2 = 0;
+                            }
+                            nextLikelyNonDrunkTargets = _.filter(walkableNeighbours, function(cn){
+                                return cn.order == o1 || cn.order == o2;
+                            });
                         }
-                    }
-
-                    if(!stumbledUsingPath){
+                        projectedScore = _.meanBy(nextLikelyNonDrunkTargets, function(cn){
+                            return cn.score;
+                        });
+                        var previousScore = path.data[_prevCoords.i];
+                        newDrunkState = previousScore <= projectedScore;
+                    }else{
                         if (currentDistance <= _previousDistance){
                             var projectedDistance = distance(projectedCoords, _target);
                             if (projectedDistance < currentDistance){
