@@ -13,6 +13,15 @@
     'use strict';
 
 /*
+
+============================================================================================
+400lb h2x0rz Guild is now hiring.
+* Must understand javascript and git, be able to understand and improve on this script
+* Weighing exactly 400lb is an advantage, plus points also given for living in a basement, like all the proper wizards do
+============================================================================================
+
+
+0.19  * Advertisement added
 0.18  * Unreachable paths handled
 0.17  * More complex targeting
       * Settings
