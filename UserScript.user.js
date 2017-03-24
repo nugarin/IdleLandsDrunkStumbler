@@ -20,7 +20,8 @@
 * Weighing exactly 400lb is an advantage, plus points also given for living in a basement, like all the proper wizards do
 ============================================================================================
 
-
+0.20  * Renamed to .user.js
+      * Turned off pet gold collection as default
 0.19  * Advertisement added
 0.18  * Unreachable paths handled
 0.17  * More complex targeting
@@ -131,7 +132,7 @@
 			writable: true, enumerable:true,
 		  },
 		  'ConfiscatePetGold': {
-			value: true,
+			value: false,
 			writable: true, enumerable:true,
 		  },
 		  'ClearTargetOnArrival': {
