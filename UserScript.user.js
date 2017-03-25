@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IdleLandDrunkStumbler
 // @namespace    http://tampermonkey.net/
-// @version      0.20
+// @version      0.21
 // @require     http://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js
 // @description  Guide your "hero" using the power of alcohol!
 // @author       commiehunter
@@ -20,6 +20,10 @@
 * Weighing exactly 400lb is an advantage, plus points also given for living in a basement, like all the proper wizards do
 ============================================================================================
 
+0.21  * Removed defunct settings
+      * Fixed map loading check
+      * XP gain indicator
+      * LeavePartyIfNotLeaderAndHaveTarget defaults to false
 0.20  * Renamed to .user.js
       * Turned off pet gold collection as default
 0.19  * Advertisement added
@@ -47,29 +51,10 @@
     //CTRL+click on the map to set repeating target
     //click on the map to set a target to be visited once
     //long click on the map to clear targets for current map
-    
-    
+    //
     console.log("IdleLandDrunkStumbler active");
     var _previousDistance = null;
-    
     $ = jQuery = jQuery.noConflict(true);
-	
-	// function MapTarget(){
-		// Object.defineProperties(this, {
-		  // 'x': {
-			// value: null,
-			// writable: true, enumerable:true,
-		  // },
-		  // 'y': {
-			// value: null,
-			// writable: true, enumerable:true,
-		  // },
-		  // 'map': {
-			// value: null,
-			// writable: true, enumerable:true,
-		  // }
-		// });
-	// }
 	function DrunkStumblerSettings(){
 		var key = "DrunkStumblerSettings";
 		this.load = function(){
@@ -128,14 +113,10 @@
 		};
 		Object.defineProperties(this, {
 		  'LeavePartyIfNotLeaderAndHaveTarget': {
-			value: true,
-			writable: true, enumerable:true,
-		  },
-		  'ConfiscatePetGold': {
 			value: false,
 			writable: true, enumerable:true,
 		  },
-		  'ClearTargetOnArrival': {
+		  'ConfiscatePetGold': {
 			value: false,
 			writable: true, enumerable:true,
 		  },
@@ -151,6 +132,41 @@
 	}
 	var _settings = window.DrunkStumblerSettingsInstance;
 	_settings.load();
+    //
+    //XP CALCULATOR
+    //
+    function XPCalculator(){
+        this.maxGainLen = 100;
+        this.gains = [];
+        this.lastXP = null;
+        this.mean = 0;
+        this.lastGain = 0;
+        this.update = function(player){
+            var currentXP = player._xp.__current;
+            if (this.lastXP){
+                var gain = currentXP - this.lastXP;
+                this.gains.push(gain);
+                while (this.gains.lenght> this.maxGainLen){
+                    this.gains.shift();
+                }
+                this.maximum = player._xp.maximum;
+                this.mean = Math.floor(_.mean(this.gains));
+                this.lastGain = gain;
+            }
+            this.lastXP = currentXP;
+        };
+        this.display = function(){
+            if (!this.lastGain){
+                return "";
+            }
+            var sign = this.lastGain >0? "+":"";
+            return "XP:" + this.lastXP + "/" + this.maximum + " (" + sign + this.lastGain + ", AVG: "+ this.mean+ ")";
+        };
+    }
+    var _xpCalculator = new XPCalculator();
+    //
+    //Angular component finder
+    //
     function ComponentProvider(){
         this.find = function (search){
             var n = ng.probe($(search)[0]);
@@ -186,13 +202,17 @@
         var mr = _cp.MapRendererComponent;
         if (mr){
             var currentMap = mr.player.map;
+            if (_currentCachedMap && _currentCachedMap.mapName == currentMap){
+                return;
+            }
+            _currentCachedMap = null;
             _currentCachedMap = mr.phaser.cache.getTilemapData(currentMap);
-            if (_currentCachedMap){
+            if (!_currentCachedMap){
                 mr.phaser.load.tilemap(mr.player.map, mr.game.baseUrl+ "/maps/world-maps/" + mr.player.mapPath, null, window.Phaser.Tilemap.TILED_JSON);
                 _currentCachedMap = mr.phaser.cache.getTilemapData(currentMap);
-                if (_currentCachedMap){
-                    _currentCachedMap.mapName = currentMap;
-                }
+            }
+            if (_currentCachedMap){
+                _currentCachedMap.mapName = currentMap;
             }
         }
     }
@@ -204,7 +224,6 @@
         }
         reloadCachedMap();
         var mapCanvas = $("canvas");
-        //mapCanvas[0].addEventListener("click", handleDrunkWalkTargets);
         mapCanvas[0].addEventListener("mousedown", handleDrunkWalkTargets);
         mapCanvas[0].addEventListener("mouseup", handleDrunkWalkTargets);
     }
@@ -526,8 +545,7 @@
          }
     }
     var _prevCoords = null;
-    //Run on interval of 1 second
-    function drunkWalkCheckPulse(){
+    function drunkWalkCheckPulse(updatedData){
         handlePet();//TODO: own timer
         var app = _cp.MyApp;
         var player = app.state.player.value;
@@ -644,8 +662,7 @@
                 _previousDistance = currentDistance;
                 var displayDistance = Math.round(currentDistance * 100)/100;
                 var targetText = _.join(_.map(targetArray, function(t){ return "[" + t.x + "," + t.y + "]"+ (t.repeat? "*":""); }),", ");
-
-                var mapTitle = "TARGET:"+ targetText + " D:" + displayDistance + " DRUNK:" + newDrunkState + " PATH:" + stumbledUsingPath;
+                var mapTitle = "TARGET:"+ targetText + " D:" + displayDistance + " DRUNK:" + newDrunkState + " PATH:" + stumbledUsingPath + " "+_xpCalculator.display();
                 console.log("moving from "+ newCoords.x + ", "+ newCoords.y +  " to " + mapTitle + " current tile score: "+ currentScore + " next tile: "+ projectedScore + "["+ projectedCoords.x + ","+ projectedCoords.y +"]");
                 setMapTitle(mapTitle);
         }
@@ -670,8 +687,13 @@
     //
     function mainInit(){
         window.PhaserGlobal = {   hideBanner: true }; //hide phaser.io spam
-        
         console.log("mainInit");
+        window.socket.on("data", function(data){
+            if (data.update == "player"){
+                _xpCalculator.update(data.data);
+                drunkWalkCheckPulse(data.data);
+            }
+        });
         var target = document.getElementsByTagName('ion-nav')[0];
         // create an observer instance
         var observer = new MutationObserver(function(mutations) {
@@ -696,23 +718,7 @@
 
         // pass in the target node, as well as the observer options
         observer.observe(target, config);
-
-        // later, you can stop observing
-        //observer.disconnect();
-        
-        /*
-how does one hook into the contentUpdate? have to replace and intercept the original function?
- var hookedHandleContentUpdate = primus.handleContentUpdate
- then you replace the original with your own
- return ev0_hookedHandleContentUpdate.apply(this, arguments);
- at the end of your hook
-        */
-        
-        setInterval(drunkWalkCheckPulse, 1000);
         initMap();
-        
     }
-    
     setTimeout(mainInit, 5000); //load after 5 seconds
-    
 })();
