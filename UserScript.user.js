@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IdleLandDrunkStumbler
 // @namespace    http://tampermonkey.net/
-// @version      0.21
+// @version      0.22
 // @require     http://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js
 // @description  Guide your "hero" using the power of alcohol!
 // @author       commiehunter
@@ -19,7 +19,8 @@
 * Must understand javascript and git, be able to understand and improve on this script
 * Weighing exactly 400lb is an advantage, plus points also given for living in a basement, like all the proper wizards do
 ============================================================================================
-
+0.22  * Turned off most of console spam
+      * Added choices handlers
 0.21  * Removed defunct settings
       * Fixed map loading check
       * XP gain indicator
@@ -123,7 +124,11 @@
 		  'MapTargets': {
 			value: {},
 			writable: true, enumerable:true,
-		  }
+		  },
+          'Choices': {
+			value: {},
+			writable: true, enumerable:true,
+		  },
 		});
 	}
 	window.DrunkStumblerSettings = DrunkStumblerSettings;
@@ -164,6 +169,57 @@
         };
     }
     var _xpCalculator = new XPCalculator();
+    //
+    //Chooser
+    //
+    function PlayerUpdateHandler_Choices(){
+        this.update = function(player){
+            if (!player.choices || !player.choices.length){
+                return;
+            }
+            if (!_settings.Choices || !Object.keys(_settings.Choices).length){
+                return;
+            }
+            var app = _cp.MyApp;
+            var pet = app.state.petactive.value;
+            var eq = app.state.equipment.value;
+            var choiceDone = false;
+            _.forEach(player.choices, function(choice){
+                var handler = _settings.Choices[choice.event];
+                if (!handler){
+                    //console.log(`no handler for ${choice.event}`);
+                    return true;
+                }
+                _.forEach(choice.choices, function(possibleAction){
+                    var actionHandler = handler[possibleAction];
+                    if (!actionHandler){
+                        //console.log(`no action handler for ${choice.event}.${possibleAction}`);
+                        return true;
+                    }
+                    var result = false;
+                    try{
+                        var compiledHandler = new Function('data','app','pet','eq','player', `return ${actionHandler}`);
+                        result = compiledHandler(choice.extraData, _cp.MyApp, _cp.MyApp.state.petactive.value, _cp.MyApp.state.equipment.value, player);
+                        //console.log(`handler ${choice.event}.${possibleAction} result:${result} |${actionHandler}|`);
+                    }catch(e){
+                        console.log(`handler ${choice.event}.${possibleAction} error:${e} |${actionHandler}|`);
+                    }
+                    if (result){
+                        //perform choice here
+                        _cp.MyApp.primus.makeChoice(choice.id, possibleAction);
+                        choiceDone = true;
+                        return false; //Do not proceed
+                    }
+                    return true;
+                });
+                if (choiceDone){
+                    return false; //only one choice per tick to be safe
+                }
+                return true;
+            });
+        };
+    }
+    var _playerUpdateHandler_Choices = new PlayerUpdateHandler_Choices();
     //
     //Angular component finder
     //
@@ -553,6 +609,7 @@
 		var currentMapName = player.map;
         var targetArray = _settings.MapTargets[currentMapName];
 		if (!targetArray || targetArray.length === 0){
+            setMapTitle(`NO TARGET ${_xpCalculator.display()}`);
 			return;
 		}
         var target = targetArray[0];
@@ -562,8 +619,9 @@
                     console.log("LEAVING PARTY, SINCE WE HAVE A TARGET");
                     app.primus.leaveParty();
                 }else{
-                    console.log("ERROR. NOT A PARTY LEADER. WON'T STUMBLE!");
+                    //console.log("ERROR. NOT A PARTY LEADER. WON'T STUMBLE!");
                 }
+                setMapTitle(`CAN'T STUMBLE ${_xpCalculator.display()}`);
                 return;
             }
         }
@@ -663,7 +721,7 @@
                 var displayDistance = Math.round(currentDistance * 100)/100;
                 var targetText = _.join(_.map(targetArray, function(t){ return "[" + t.x + "," + t.y + "]"+ (t.repeat? "*":""); }),", ");
                 var mapTitle = "TARGET:"+ targetText + " D:" + displayDistance + " DRUNK:" + newDrunkState + " PATH:" + stumbledUsingPath + " "+_xpCalculator.display();
-                console.log("moving from "+ newCoords.x + ", "+ newCoords.y +  " to " + mapTitle + " current tile score: "+ currentScore + " next tile: "+ projectedScore + "["+ projectedCoords.x + ","+ projectedCoords.y +"]");
+                //console.log("moving from "+ newCoords.x + ", "+ newCoords.y +  " to " + mapTitle + " current tile score: "+ currentScore + " next tile: "+ projectedScore + "["+ projectedCoords.x + ","+ projectedCoords.y +"]");
                 setMapTitle(mapTitle);
         }
         _prevCoords = newCoords;
@@ -676,7 +734,7 @@
         var currentDrunkState = app.state.personalities.value.active.Drunk;
         //console.log("Current drunk:" + currentDrunkState + " target:" + targetState);
         if (targetState != currentDrunkState){
-            console.log("Toggling Drunk");
+            //console.log("Toggling Drunk");
             toggleDrunk(app.primus);
         }
     }
@@ -692,6 +750,7 @@
             if (data.update == "player"){
                 _xpCalculator.update(data.data);
                 drunkWalkCheckPulse(data.data);
+                _playerUpdateHandler_Choices.update(data.data);
             }
         });
         var target = document.getElementsByTagName('ion-nav')[0];
