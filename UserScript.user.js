@@ -1,12 +1,13 @@
 // ==UserScript==
 // @name         IdleLandDrunkStumbler
 // @namespace    http://tampermonkey.net/
-// @version      0.22
+// @version      0.23
 // @require     http://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js
 // @description  Guide your "hero" using the power of alcohol!
 // @author       commiehunter
 // @match        http://idle.land/
 // @grant        none
+// @history 	0.23 pathfider change for guaranteed best path, show battle log in console
 // ==/UserScript==
 
 (function() {
@@ -143,12 +144,31 @@
     function XPCalculator(){
         this.maxGainLen = 100;
         this.gains = [];
+        this.ticks = [];
+        this.maxTickLen = 10;
         this.lastXP = null;
         this.mean = 0;
         this.lastGain = 0;
+        this.lastTick = 0;
+        this.tickDuration = 0;
+        this.lastMaximum = 0;
         this.update = function(player){
             var currentXP = player._xp.__current;
+            var tick = Date.now();
+            if (this.lastTick){
+                this.ticks.push(tick - this.lastTick);
+                while (this.ticks.length> this.maxTicksLen){
+                    this.ticks.shift();
+                }
+                if (this.ticks.length){
+                    this.tickDuration = _.mean(this.ticks);
+                }
+            }
+            this.lastTick = tick;
             if (this.lastXP){
+                if (this.lastMaximum && this.lastMaximum != player._xp.maximum){
+                    this.lastXP = 0; //reset last XP since we just gained a level
+                }
                 var gain = currentXP - this.lastXP;
                 this.gains.push(gain);
                 while (this.gains.lenght> this.maxGainLen){
@@ -159,13 +179,29 @@
                 this.lastGain = gain;
             }
             this.lastXP = currentXP;
+            this.lastMaximum = player._xp.maximum;
         };
         this.display = function(){
             if (!this.lastGain){
                 return "";
             }
             var sign = this.lastGain >0? "+":"";
-            return "XP:" + this.lastXP + "/" + this.maximum + " (" + sign + this.lastGain + ", AVG: "+ this.mean+ ")";
+            var tickDuration = this.tickDuration ? this.tickDuration: 5000;
+            var gainDisplay = {};
+            var xpNeeded = this.lastMaximum - this.lastXP;
+            gainDisplay.second = {gain: 1000 * this.mean / tickDuration};
+            gainDisplay.second.toLevel = xpNeeded/Math.max(1,gainDisplay.second.gain);
+            gainDisplay.minute = {gain: gainDisplay.second.gain * 60};
+            gainDisplay.minute.toLevel = xpNeeded/Math.max(1,gainDisplay.minute.gain);
+            gainDisplay.hour = {gain: gainDisplay.minute.gain * 60};
+            gainDisplay.hour.toLevel = xpNeeded/Math.max(1,gainDisplay.hour.gain);
+            gainDisplay.day = {gain: gainDisplay.hour.gain * 24};
+            gainDisplay.day.toLevel = xpNeeded/Math.max(1,gainDisplay.day.gain);
+            var gainUnit = "minute";
+            var xpGainText = `${Math.round(gainDisplay[gainUnit].gain)} p/${gainUnit}`;
+            var toLevelUnit = "minute";
+            var xpToLevelText = `${Math.round(gainDisplay[toLevelUnit].toLevel)} ${toLevelUnit}${gainDisplay[toLevelUnit].toLevel>1?"s":""}`;
+            return `XP:${this.lastXP}/${this.maximum} ${sign}${this.lastGain}, ${xpGainText} Next level in ${xpToLevelText} )`;
         };
     }
     var _xpCalculator = new XPCalculator();
@@ -206,6 +242,7 @@
                     }
                     if (result){
                         //perform choice here
+                        console.log(`CHOICE WAS ACCEPTED: ${choice.event}.${possibleAction}|${actionHandler}|`);
                         _cp.MyApp.primus.makeChoice(choice.id, possibleAction);
                         choiceDone = true;
                         return false; //Do not proceed
@@ -379,62 +416,66 @@
                 }
                 var noneScored = true;
                 var ql = currentPath.scoreQueue.length;
+                var noneScoredThisIteration = false;
                 var largestScoreThisLoop = 0;
-                var reAddToQueue = [];
-                var reverse = (loopIdx + currentPath.runCount) % 2 === 0;
-                var scoreKeys = Object.keys(currentPath.scoreQueue);
-                var startIdx = 0;
-                var endIdx = scoreKeys.length;
-                var inc = 1;
-                if (reverse){
-                    startIdx = scoreKeys.length -1;
-                    endIdx = -1;
-                    inc = -1;
-                }
                 var betterPaths = 0;
-                for (var i = startIdx; i != endIdx; i+=inc){
-                    var queueIndex = scoreKeys[i];
-                    var cell = currentPath.scoreQueue[queueIndex];
-                    var cellNeighbours = cell.neighbours;
-                    if (!cellNeighbours){
-                        cellNeighbours = cell.neighbours = me.circleIndexes(cell, 1, b);
+                while(!noneScoredThisIteration){
+                    var reverse = (loopIdx + currentPath.runCount) % 2 === 0;
+                    var scoreKeys = Object.keys(currentPath.scoreQueue);
+                    var startIdx = 0;
+                    var endIdx = scoreKeys.length;
+                    var inc = 1;
+                    if (reverse){
+                        startIdx = scoreKeys.length -1;
+                        endIdx = -1;
+                        inc = -1;
                     }
-                    var scorableWalkableNeigbours = [];
-                    var scoredWalkableNeighbours = [];
-                    _.forEach(cellNeighbours, function(cn){
-                        if (currentPath.data[cn.i] > 0){
-                            scoredWalkableNeighbours.push(cn);
+                    noneScoredThisIteration = true;
+                    for (var i = startIdx; i != endIdx; i+=inc){
+                        var queueIndex = scoreKeys[i];
+                        var cell = currentPath.scoreQueue[queueIndex];
+                        var cellNeighbours = cell.neighbours;
+                        if (!cellNeighbours){
+                            cellNeighbours = cell.neighbours = me.circleIndexes(cell, 1, b);
                         }
-                        if(currentPath.data[cn.i] >= 0){
-                            scorableWalkableNeigbours.push(cn);
-                        }
-                    });
-                    if (scoredWalkableNeighbours.length){
-                        var neighboursByScore = _.sortBy(scoredWalkableNeighbours, function(cn){
-                            return currentPath.data[cn.i];
+                        var scorableWalkableNeigbours = [];
+                        var scoredWalkableNeighbours = [];
+                        _.forEach(cellNeighbours, function(cn){
+                            if (currentPath.data[cn.i] > 0){
+                                scoredWalkableNeighbours.push(cn);
+                            }
+                            if(currentPath.data[cn.i] >= 0){
+                                scorableWalkableNeigbours.push(cn);
+                            }
                         });
-                        var bestNeighbourCell = _.first(neighboursByScore);
-                        var bestNeighbourScore = currentPath.data[bestNeighbourCell.i];
-                        var ourScore = bestNeighbourScore + 1;
-                        largestScoreThisLoop = Math.max(largestScoreThisLoop, ourScore);
-                        currentPath.data[cell.i] = ourScore;
-                        delete currentPath.scoreQueue[queueIndex];
-                        noneScored = false;
-                        if (scorableWalkableNeigbours.length > 1){ //Can also rescore some of the neighbours
-                            _.forEach(scorableWalkableNeigbours, function(cn){
-                                if (currentPath.data[cn.i] === 0){ //not scored, award ours + 1
-                                    currentPath.data[cn.i] = ourScore + 1;
-                                }else if (currentPath.data[cn.i] > ourScore +1){
-                                    currentPath.data[cn.i] = ourScore + 1; // alternative, better path found
-                                    currentPath.scoreQueue.push(cn);
-                                    betterPaths++;
-                                }
+                        if (scoredWalkableNeighbours.length){
+                            var neighboursByScore = _.sortBy(scoredWalkableNeighbours, function(cn){
+                                return currentPath.data[cn.i];
                             });
+                            var bestNeighbourCell = _.first(neighboursByScore);
+                            var bestNeighbourScore = currentPath.data[bestNeighbourCell.i];
+                            var ourScore = bestNeighbourScore + 1;
+                            largestScoreThisLoop = Math.max(largestScoreThisLoop, ourScore);
+                            currentPath.data[cell.i] = ourScore;
+                            delete currentPath.scoreQueue[queueIndex];
+                            noneScored = false;
+                            noneScoredThisIteration = false;
+                            if (scorableWalkableNeigbours.length > 1){ //Can also rescore some of the neighbours
+                                _.forEach(scorableWalkableNeigbours, function(cn){
+                                    if (currentPath.data[cn.i] === 0){ //not scored, award ours + 1
+                                        currentPath.data[cn.i] = ourScore + 1;
+                                    }else if (currentPath.data[cn.i] > ourScore +1){
+                                        currentPath.data[cn.i] = ourScore + 1; // alternative, better path found
+                                        currentPath.scoreQueue.push(cn);
+                                        betterPaths++;
+                                    }
+                                });
+                            }
                         }
                     }
                 }
                 currentPath.scoreQueue = _.compact(currentPath.scoreQueue);
-                dbg.info = "R: "+ currentPath.radius + " QL:" + ql + "->" + currentPath.scoreQueue.length +" LScore: " + largestScoreThisLoop + " betterPaths:" + betterPaths + " reverse:"+reverse;
+                //dbg.info = "R: "+ currentPath.radius + " QL:" + ql + "->" + currentPath.scoreQueue.length +" LScore: " + largestScoreThisLoop + " betterPaths:" + betterPaths + " reverse:"+reverse;
                 //Loop end
                 currentPath.radius++;
                 currentPath.radius = Math.min(currentPath.radius, maxRadius);
@@ -751,6 +792,15 @@
                 _xpCalculator.update(data.data);
                 drunkWalkCheckPulse(data.data);
                 _playerUpdateHandler_Choices.update(data.data);
+            }
+            if (data.update == "battle"){
+                _.forEach(_.take(_.reverse(data.data.messageData), 20), function(battleMessage){
+                    console.log(`BATTLE TAIL: ${battleMessage.message}`);
+                    if (battleMessage.message == "Battle complete."){
+                        return false;
+                    }
+                    return true;
+                });
             }
         });
         var target = document.getElementsByTagName('ion-nav')[0];
