@@ -828,6 +828,7 @@
         // pass in the target node, as well as the observer options
         observer.observe(target, config);
         initMap();
+	clearInterval(mainInitInterval);
     }
-    setTimeout(mainInit, 5000); //load after 5 seconds
+    var mainInitInterval = setInterval(mainInit, 5000); //try loading every 5 seconds
 })();
