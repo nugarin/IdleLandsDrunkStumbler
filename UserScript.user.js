@@ -7,7 +7,7 @@
 // @author       commiehunter
 // @match        http://idle.land/
 // @grant        none
-// @history 	0.23 pathfider change for guaranteed best path, show battle log in console
+// @history 	0.23 pathfinder change for guaranteed best path, show battle log in console
 // ==/UserScript==
 
 (function() {
