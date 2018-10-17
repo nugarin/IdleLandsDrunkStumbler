@@ -5,7 +5,7 @@
 // @require     http://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js
 // @description  Guide your "hero" using the power of alcohol!
 // @author       commiehunter
-// @match        http://idle.land/
+// @match        https://idle.land/
 // @grant        none
 // @history 	0.23 pathfider change for guaranteed best path, show battle log in console
 // ==/UserScript==
